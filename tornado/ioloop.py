@@ -172,6 +172,10 @@ class IOLoop(Configurable):
         This is normally not necessary as `instance()` will create
         an `IOLoop` on demand, but you may want to call `install` to use
         a custom subclass of `IOLoop`.
+
+        When using an `IOLoop` subclass, `install` must be called prior
+        to creating any objects that implicitly create their own
+        `IOLoop` (e.g., :class:`tornado.httpclient.AsyncHTTPClient`).
         """
         assert not IOLoop.initialized()
         IOLoop._instance = self
@@ -814,8 +818,8 @@ class PollIOLoop(IOLoop):
                             due_timeouts.append(heapq.heappop(self._timeouts))
                         else:
                             break
-                    if (self._cancellations > 512
-                            and self._cancellations > (len(self._timeouts) >> 1)):
+                    if (self._cancellations > 512 and
+                            self._cancellations > (len(self._timeouts) >> 1)):
                         # Clean up the timeout queue when it gets large and it's
                         # more than half cancellations.
                         self._cancellations = 0
@@ -874,7 +878,7 @@ class PollIOLoop(IOLoop):
                 # Pop one fd at a time from the set of pending fds and run
                 # its handler. Since that handler may perform actions on
                 # other file descriptors, there may be reentrant calls to
-                # this IOLoop that update self._events
+                # this IOLoop that modify self._events
                 self._events.update(event_pairs)
                 while self._events:
                     fd, events = self._events.popitem()
@@ -966,26 +970,24 @@ class _Timeout(object):
     """An IOLoop timeout, a UNIX timestamp and a callback"""
 
     # Reduce memory overhead when there are lots of pending callbacks
-    __slots__ = ['deadline', 'callback', 'tiebreaker']
+    __slots__ = ['deadline', 'callback', 'tdeadline']
 
     def __init__(self, deadline, callback, io_loop):
         if not isinstance(deadline, numbers.Real):
             raise TypeError("Unsupported deadline %r" % deadline)
         self.deadline = deadline
         self.callback = callback
-        self.tiebreaker = next(io_loop._timeout_counter)
+        self.tdeadline = (deadline, next(io_loop._timeout_counter))
 
     # Comparison methods to sort by deadline, with object id as a tiebreaker
     # to guarantee a consistent ordering.  The heapq module uses __le__
     # in python2.5, and __lt__ in 2.6+ (sort() and most other comparisons
     # use __lt__).
     def __lt__(self, other):
-        return ((self.deadline, self.tiebreaker) <
-                (other.deadline, other.tiebreaker))
+        return self.tdeadline < other.tdeadline
 
     def __le__(self, other):
-        return ((self.deadline, self.tiebreaker) <=
-                (other.deadline, other.tiebreaker))
+        return self.tdeadline <= other.tdeadline
 
 
 class PeriodicCallback(object):
@@ -1048,6 +1050,7 @@ class PeriodicCallback(object):
 
             if self._next_timeout <= current_time:
                 callback_time_sec = self.callback_time / 1000.0
-                self._next_timeout += (math.floor((current_time - self._next_timeout) / callback_time_sec) + 1) * callback_time_sec
+                self._next_timeout += (math.floor((current_time - self._next_timeout) /
+                                                  callback_time_sec) + 1) * callback_time_sec
 
             self._timeout = self.io_loop.add_timeout(self._next_timeout, self._run)

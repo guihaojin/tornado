@@ -51,11 +51,12 @@ import re
 
 from tornado import escape
 from tornado.log import gen_log
+from tornado.util import PY3
 
 from tornado._locale_data import LOCALE_NAMES
 
 _default_locale = "en_US"
-_translations = {}
+_translations = {}  # type: dict
 _supported_locales = frozenset([_default_locale])
 _use_gettext = False
 CONTEXT_SEPARATOR = "\x04"
@@ -147,11 +148,11 @@ def load_translations(directory, encoding=None):
                 # in most cases but is common with CSV files because Excel
                 # cannot read utf-8 files without a BOM.
                 encoding = 'utf-8-sig'
-        try:
+        if PY3:
             # python 3: csv.reader requires a file open in text mode.
             # Force utf8 to avoid dependence on $LANG environment variable.
             f = open(full_path, "r", encoding=encoding)
-        except TypeError:
+        else:
             # python 2: csv can only handle byte strings (in ascii-compatible
             # encodings), which we decode below. Transcode everything into
             # utf8 before passing it to csv.reader.

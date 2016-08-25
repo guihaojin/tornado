@@ -11,7 +11,7 @@ from tornado.simple_httpclient import SimpleAsyncHTTPClient
 from tornado.template import DictLoader
 from tornado.testing import AsyncHTTPTestCase, AsyncTestCase, ExpectLog, gen_test
 from tornado.test.util import unittest, skipBefore35, exec_test
-from tornado.util import ObjectDict, unicode_type, timedelta_to_seconds
+from tornado.util import ObjectDict, unicode_type, timedelta_to_seconds, PY3
 from tornado.web import RequestHandler, authenticated, Application, asynchronous, url, HTTPError, StaticFileHandler, _create_signature_v1, create_signed_value, decode_signed_value, ErrorHandler, UIModule, MissingArgumentError, stream_request_body, Finish, removeslash, addslash, RedirectHandler as WebRedirectHandler, get_signature_key_version, GZipContentEncoding
 
 import binascii
@@ -27,14 +27,16 @@ import os
 import re
 import socket
 
-try:
+if PY3:
     import urllib.parse as urllib_parse  # py3
-except ImportError:
+else:
     import urllib as urllib_parse  # py2
 
 wsgi_safe_tests = []
 
-relpath = lambda *a: os.path.join(os.path.dirname(__file__), *a)
+
+def relpath(*a):
+    return os.path.join(os.path.dirname(__file__), *a)
 
 
 def wsgi_safe(cls):
@@ -1395,6 +1397,19 @@ class ClearHeaderTest(SimpleHandlerTestCase):
         self.assertEqual(response.headers["h2"], "bar")
 
 
+class Header204Test(SimpleHandlerTestCase):
+    class Handler(RequestHandler):
+        def get(self):
+            self.set_status(204)
+            self.finish()
+
+    def test_204_headers(self):
+        response = self.fetch('/')
+        self.assertEqual(response.code, 204)
+        self.assertNotIn("Content-Length", response.headers)
+        self.assertNotIn("Transfer-Encoding", response.headers)
+
+
 @wsgi_safe
 class Header304Test(SimpleHandlerTestCase):
     class Handler(RequestHandler):
@@ -1479,6 +1494,7 @@ class RaiseWithReasonTest(SimpleHandlerTestCase):
     def test_httperror_str_from_httputil(self):
         self.assertEqual(str(HTTPError(682)), "HTTP 682: Unknown")
 
+
 @wsgi_safe
 class ErrorHandlerXSRFTest(WebTestCase):
     def get_handlers(self):
@@ -1503,8 +1519,8 @@ class ErrorHandlerXSRFTest(WebTestCase):
 class GzipTestCase(SimpleHandlerTestCase):
     class Handler(RequestHandler):
         def get(self):
-            if self.get_argument('vary', None):
-                self.set_header('Vary', self.get_argument('vary'))
+            for v in self.get_arguments('vary'):
+                self.add_header('Vary', v)
             # Must write at least MIN_LENGTH bytes to activate compression.
             self.write('hello world' + ('!' * GZipContentEncoding.MIN_LENGTH))
 
@@ -1513,8 +1529,7 @@ class GzipTestCase(SimpleHandlerTestCase):
             gzip=True,
             static_path=os.path.join(os.path.dirname(__file__), 'static'))
 
-    def test_gzip(self):
-        response = self.fetch('/')
+    def assert_compressed(self, response):
         # simple_httpclient renames the content-encoding header;
         # curl_httpclient doesn't.
         self.assertEqual(
@@ -1522,17 +1537,18 @@ class GzipTestCase(SimpleHandlerTestCase):
                 'Content-Encoding',
                 response.headers.get('X-Consumed-Content-Encoding')),
             'gzip')
+
+
+    def test_gzip(self):
+        response = self.fetch('/')
+        self.assert_compressed(response)
         self.assertEqual(response.headers['Vary'], 'Accept-Encoding')
 
     def test_gzip_static(self):
         # The streaming responses in StaticFileHandler have subtle
         # interactions with the gzip output so test this case separately.
         response = self.fetch('/robots.txt')
-        self.assertEqual(
-            response.headers.get(
-                'Content-Encoding',
-                response.headers.get('X-Consumed-Content-Encoding')),
-            'gzip')
+        self.assert_compressed(response)
         self.assertEqual(response.headers['Vary'], 'Accept-Encoding')
 
     def test_gzip_not_requested(self):
@@ -1542,9 +1558,16 @@ class GzipTestCase(SimpleHandlerTestCase):
 
     def test_vary_already_present(self):
         response = self.fetch('/?vary=Accept-Language')
-        self.assertEqual(response.headers['Vary'],
-                         'Accept-Language, Accept-Encoding')
+        self.assert_compressed(response)
+        self.assertEqual([s.strip() for s in response.headers['Vary'].split(',')],
+                         ['Accept-Language', 'Accept-Encoding'])
 
+    def test_vary_already_present_multiple(self):
+        # Regression test for https://github.com/tornadoweb/tornado/issues/1670
+        response = self.fetch('/?vary=Accept-Language&vary=Cookie')
+        self.assert_compressed(response)
+        self.assertEqual([s.strip() for s in response.headers['Vary'].split(',')],
+                         ['Accept-Language', 'Cookie', 'Accept-Encoding'])
 
 @wsgi_safe
 class PathArgsInPrepareTest(WebTestCase):
@@ -2162,6 +2185,7 @@ class BaseStreamingRequestFlowControlTest(object):
 
     def test_flow_control_chunked_body(self):
         chunks = [b'abcd', b'efgh', b'ijkl']
+
         @gen.coroutine
         def body_producer(write):
             for i in chunks:
@@ -2186,6 +2210,7 @@ class BaseStreamingRequestFlowControlTest(object):
                          dict(methods=['prepare', 'data_received',
                                        'data_received', 'data_received',
                                        'post']))
+
 
 class DecoratedStreamingRequestFlowControlTest(
         BaseStreamingRequestFlowControlTest,
@@ -2485,6 +2510,22 @@ class XSRFTest(SimpleHandlerTestCase):
                 body=urllib_parse.urlencode(dict(_xsrf=self.xsrf_token)))
         self.assertEqual(response.code, 403)
 
+    def test_xsrf_fail_argument_invalid_format(self):
+        with ExpectLog(gen_log, ".*'_xsrf' argument has invalid format"):
+            response = self.fetch(
+                "/", method="POST",
+                headers=self.cookie_headers(),
+                body=urllib_parse.urlencode(dict(_xsrf='3|')))
+        self.assertEqual(response.code, 403)
+
+    def test_xsrf_fail_cookie_invalid_format(self):
+        with ExpectLog(gen_log, ".*XSRF cookie does not match POST"):
+            response = self.fetch(
+                "/", method="POST",
+                headers=self.cookie_headers(token='3|'),
+                body=urllib_parse.urlencode(dict(_xsrf=self.xsrf_token)))
+        self.assertEqual(response.code, 403)
+
     def test_xsrf_fail_cookie_no_body(self):
         with ExpectLog(gen_log, ".*'_xsrf' argument missing"):
             response = self.fetch(
@@ -2522,7 +2563,7 @@ class XSRFTest(SimpleHandlerTestCase):
 
     def test_xsrf_success_header(self):
         response = self.fetch("/", method="POST", body=b"",
-                              headers=dict({"X-Xsrftoken": self.xsrf_token},
+                              headers=dict({"X-Xsrftoken": self.xsrf_token},  # type: ignore
                                            **self.cookie_headers()))
         self.assertEqual(response.code, 200)
 
@@ -2625,8 +2666,8 @@ class FinishExceptionTest(SimpleHandlerTestCase):
                 raise Finish()
 
     def test_finish_exception(self):
-        for url in ['/', '/?finish_value=1']:
-            response = self.fetch(url)
+        for u in ['/', '/?finish_value=1']:
+            response = self.fetch(u)
             self.assertEqual(response.code, 401)
             self.assertEqual('Basic realm="something"',
                              response.headers.get('WWW-Authenticate'))
@@ -2770,3 +2811,26 @@ class ApplicationTest(AsyncTestCase):
 class URLSpecReverseTest(unittest.TestCase):
     def test_reverse(self):
         self.assertEqual('/favicon.ico', url(r'/favicon\.ico', None).reverse())
+        self.assertEqual('/favicon.ico', url(r'^/favicon\.ico$', None).reverse())
+
+    def test_non_reversible(self):
+        # URLSpecs are non-reversible if they include non-constant
+        # regex features outside capturing groups. Currently, this is
+        # only strictly enforced for backslash-escaped character
+        # classes.
+        paths = [
+            r'^/api/v\d+/foo/(\w+)$',
+        ]
+        for path in paths:
+            # A URLSpec can still be created even if it cannot be reversed.
+            url_spec = url(path, None)
+            try:
+                result = url_spec.reverse()
+                self.fail("did not get expected exception when reversing %s. "
+                          "result: %s" % (path, result))
+            except ValueError:
+                pass
+
+    def test_reverse_arguments(self):
+        self.assertEqual('/api/v1/foo/bar',
+                         url(r'^/api/v1/foo/(\w+)$', None).reverse('bar'))

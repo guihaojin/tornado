@@ -92,7 +92,8 @@ from tornado.util import PY3, raise_exc_info
 
 try:
     try:
-        from functools import singledispatch  # py34+
+        # py34+
+        from functools import singledispatch  # type: ignore
     except ImportError:
         from singledispatch import singledispatch  # backport
 except ImportError:
@@ -108,12 +109,14 @@ except ImportError:
 
 try:
     try:
-        from collections.abc import Generator as GeneratorType  # py35+
+        # py35+
+        from collections.abc import Generator as GeneratorType  # type: ignore
     except ImportError:
-        from backports_abc import Generator as GeneratorType
+        from backports_abc import Generator as GeneratorType  # type: ignore
 
     try:
-        from inspect import isawaitable  # py35+
+        # py35+
+        from inspect import isawaitable  # type: ignore
     except ImportError:
         from backports_abc import isawaitable
 except ImportError:
@@ -121,7 +124,7 @@ except ImportError:
         raise
     from types import GeneratorType
 
-    def isawaitable(x):
+    def isawaitable(x):  # type: ignore
         return False
 
 if PY3:
@@ -830,7 +833,7 @@ def maybe_future(x):
 
 
 def with_timeout(timeout, future, io_loop=None, quiet_exceptions=()):
-    """Wraps a `.Future` in a timeout.
+    """Wraps a `.Future` (or other yieldable object) in a timeout.
 
     Raises `TimeoutError` if the input future does not complete before
     ``timeout``, which may be specified in any form allowed by
@@ -841,15 +844,18 @@ def with_timeout(timeout, future, io_loop=None, quiet_exceptions=()):
     will be logged unless it is of a type contained in ``quiet_exceptions``
     (which may be an exception type or a sequence of types).
 
-    Currently only supports Futures, not other `YieldPoint` classes.
+    Does not support `YieldPoint` subclasses.
 
     .. versionadded:: 4.0
 
     .. versionchanged:: 4.1
        Added the ``quiet_exceptions`` argument and the logging of unhandled
        exceptions.
+
+    .. versionchanged:: 4.4
+       Added support for yieldable objects other than `.Future`.
     """
-    # TODO: allow yield points in addition to futures?
+    # TODO: allow YieldPoints in addition to other yieldables?
     # Tricky to do with stack_context semantics.
     #
     # It's tempting to optimize this by cancelling the input future on timeout
@@ -857,6 +863,7 @@ def with_timeout(timeout, future, io_loop=None, quiet_exceptions=()):
     # one waiting on the input future, so cancelling it might disrupt other
     # callers and B) concurrent futures can only be cancelled while they are
     # in the queue, so cancellation cannot reliably bound our waiting time.
+    future = convert_yielded(future)
     result = Future()
     chain_future(future, result)
     if io_loop is None:

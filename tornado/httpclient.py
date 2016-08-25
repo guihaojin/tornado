@@ -108,14 +108,14 @@ class AsyncHTTPClient(Configurable):
 
     Example usage::
 
-        def handle_request(response):
+        def handle_response(response):
             if response.error:
                 print "Error:", response.error
             else:
                 print response.body
 
         http_client = AsyncHTTPClient()
-        http_client.fetch("http://www.google.com/", handle_request)
+        http_client.fetch("http://www.google.com/", handle_response)
 
     The constructor for this class is magic in several respects: It
     actually creates an instance of an implementation-specific
@@ -530,7 +530,7 @@ class HTTPResponse(object):
 
     * buffer: ``cStringIO`` object for response body
 
-    * body: response body as string (created on demand from ``self.buffer``)
+    * body: response body as bytes (created on demand from ``self.buffer``)
 
     * error: Exception object, if any
 
@@ -572,15 +572,14 @@ class HTTPResponse(object):
         self.request_time = request_time
         self.time_info = time_info or {}
 
-    def _get_body(self):
+    @property
+    def body(self):
         if self.buffer is None:
             return None
         elif self._body is None:
             self._body = self.buffer.getvalue()
 
         return self._body
-
-    body = property(_get_body)
 
     def rethrow(self):
         """If there was an error on the request, raise an `HTTPError`."""

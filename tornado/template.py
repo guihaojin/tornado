@@ -207,12 +207,12 @@ import threading
 
 from tornado import escape
 from tornado.log import app_log
-from tornado.util import ObjectDict, exec_in, unicode_type
+from tornado.util import ObjectDict, exec_in, unicode_type, PY3
 
-try:
-    from cStringIO import StringIO  # py2
-except ImportError:
-    from io import StringIO  # py3
+if PY3:
+    from io import StringIO
+else:
+    from cStringIO import StringIO
 
 _DEFAULT_AUTOESCAPE = "xhtml_escape"
 _UNSET = object()
